@@ -40,16 +40,6 @@ enum {
     VM_ERR_UNKNOWN_OPCODE = 9,
 };
 
-/* ----------------- Opcode set -----------------
-   This opcode set is purposely simple and binary-friendly.
-   Encoding details (high level):
-   - opcode is 1 byte
-   - registers encoded as 1 byte each (value 0..VM_NUM_REGS-1)
-   - immediates use little-endian encoding:
-       imm8  -> 1 byte
-       imm32 -> 4 bytes (signed)
-       imm64 -> 8 bytes (signed)
-*/
 enum VM_Opcode {
     OP_HLT               = 0x00,
     OP_NOP               = 0x01,
@@ -137,3 +127,4 @@ int vm_disasm_at(VM *vm, ssize_t pc, char *outbuf, size_t buflen);
 #endif
 
 #endif
+
