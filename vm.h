@@ -78,7 +78,8 @@ typedef struct VM {
    
     vm_byte_t *mem;
     size_t mem_size;
-
+    int owns_code; 
+    int owns_mem; 
   
     ssize_t callstack[VM_CALLSTACK_MAX];
     int callsp;
@@ -127,4 +128,5 @@ int vm_disasm_at(VM *vm, ssize_t pc, char *outbuf, size_t buflen);
 #endif
 
 #endif
+
 
