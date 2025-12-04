@@ -92,7 +92,7 @@ static void emit_call_write_reg(CB *cb, void *helper, uint32_t rd, uint64_t imm)
 #endif
 }
 
-/* emit native MOV_RR */
+
 static void emit_mov_rr_native(CB *cb, uint8_t rd, uint8_t rs) {
     cb_put1(cb, 0x48); cb_put1(cb, 0x8B); cb_put1(cb, 0x45); cb_put1(cb, 0xF8);
     uint32_t off_rs = (uint32_t)(offsetof(VM, regs) + (size_t)rs * sizeof(vm_word_t));
@@ -298,3 +298,4 @@ fail:
     if (patches) free(patches);
     return NULL;
 }
+
