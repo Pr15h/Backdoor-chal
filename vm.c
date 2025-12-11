@@ -86,6 +86,11 @@ int vm_init(VM *vm, const vm_byte_t *code, size_t code_size, int want_copy) {
     vm->SF = 0;
     vm->debug = 0;
     vm->last_error = VM_OK;
+
+    magic_init(0);
+
+    for (int i = 0; i < 40; ++i) vm->holes[i] = 0;
+
     return VM_OK;
 }
 
@@ -126,10 +131,28 @@ int vm_step(VM *vm) {
     ssize_t next = vm->pc + 1;
 
     if (vm->debug) {
-        printf("[vm] pc=%zd op=0x%02x\n", vm->pc, op);
     }
 
     switch (op) {
+    case OP_MAGIC: {
+        uint8_t site = 0;
+        if (read_u8(vm, next, &site) != VM_OK) {
+        vm->last_error = VM_ERR_OOB;
+        return vm->last_error;
+        }
+        next += 1;
+
+        if (site == OP_MAGIC_SITE_HOLES) {
+        magic_generate_holes(vm->holes, 40);
+
+        vm->pc = next;
+        return VM_OK;
+        }
+
+        magic_expand_and_execute((void*)vm);
+        vm->pc = next;
+        return VM_OK;
+    }
         case OP_NOP:
             vm->pc = next;
             return VM_OK;
@@ -349,7 +372,7 @@ int vm_disasm_at(VM *vm, ssize_t pc, char *outbuf, size_t buflen) {
             uint8_t rd; uint64_t imm;
             if (read_u8(vm, cur, &rd) != VM_OK) return VM_ERR_OOB; cur+=1;
             if (read_u64(vm, cur, &imm) != VM_OK) return VM_ERR_OOB;
-            return (int)(1 + 1 + 8); /* caller can call snprintf if needed */
+            return (int)(1 + 1 + 8);
         }
         case OP_MOV_RR: return 1 + 1 + 1;
         case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: return 1 + 3;
