@@ -1,16 +1,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <string.h>
+#include <openssl/sha.h>
 #include "vm.h"
-#define REG_TMP0        0   
-#define REG_TMP1        1  
-#define REG_FAIL        2   
-#define REG_HOLE_TEMP   3   
-#define REG_INPUT_BASE  16 
-#define REG_RAX         0  
 
-#define COLS 25
+#define REG_TMP0        0
+#define REG_TMP1        1
+#define REG_FAIL        2
+#define REG_HOLE_TEMP   3
+#define REG_INPUT_BASE  16
+#define REG_RAX         0
+
+#ifndef REG_HOLE_BASE
+#define REG_HOLE_BASE 41
+#endif
+
+#define COLS 40
 #define ROWS 6
 
 typedef struct { uint8_t *b; size_t len, cap; } Buf;
@@ -38,112 +45,111 @@ static void emit_cmp_rr(Buf *out, uint8_t ra, uint8_t rb){
     put1(out, rb);
 }
 
-static void emit_jz(Buf *out, uint32_t target_pc){
+static void emit_jz(Buf *out, uint64_t target_pc){
     put1(out, OP_JZ);
-    put4(out, target_pc);
+    put8(out, target_pc);
 }
 
-static void emit_jmp(Buf *out, uint32_t target_pc){
+static void emit_jmp(Buf *out, uint64_t target_pc){
     put1(out, OP_JMP);
-    put4(out, target_pc);
+    put8(out, target_pc);
 }
 
 static void emit_halt(Buf *out){
     put1(out, OP_HALT);
 }
 
-uint8_t *build_game_bytecode(const int holes[COLS], size_t *out_len) {
+uint8_t *build_game_bytecode(const int holes_unused[COLS], size_t *out_len) {
+    (void)holes_unused;
     Buf out; buf_init(&out);
 
+    put1(&out, OP_MAGIC);
+    put1(&out, OP_MAGIC_SITE_HOLES);
+
     for (int c = 0; c < COLS; ++c) {
-        emit_mov_ri(&out, REG_HOLE_TEMP, (uint64_t)holes[c]);
+        emit_mov_rr(&out, REG_HOLE_TEMP, (uint8_t)(REG_HOLE_BASE + c));
         for (int r = 0; r < ROWS; ++r) {
             emit_mov_ri(&out, REG_TMP0, (uint64_t)r);
             emit_cmp_rr(&out, REG_TMP0, REG_HOLE_TEMP);
-            uint32_t jz_pos = (uint32_t)out.len;
-            emit_jz(&out, 0xDEADBEEF);
+
+            uint64_t jz_pos = (uint64_t)out.len;
+            emit_jz(&out, 0ULL); 
+
             emit_mov_ri(&out, REG_TMP1, 1);
-            uint32_t jmp_pos = (uint32_t)out.len;
-            emit_jmp(&out, 0xDEADBEEF);
-            uint32_t label_set_zero_pc = (uint32_t)out.len;
+
+            uint64_t jmp_pos = (uint64_t)out.len;
+            emit_jmp(&out, 0ULL); 
+
+            uint64_t label_set_zero_pc = (uint64_t)out.len;
             emit_mov_ri(&out, REG_TMP1, 0);
-            uint32_t label_inner_next_pc = (uint32_t)out.len;
-            memcpy(out.b + jz_pos + 1, &label_set_zero_pc, 4);
-            memcpy(out.b + jmp_pos + 1, &label_inner_next_pc, 4);
+
+            uint64_t label_inner_next_pc = (uint64_t)out.len;
+
+            memcpy(out.b + (size_t)jz_pos + 1, &label_set_zero_pc, 8);
+            memcpy(out.b + (size_t)jmp_pos + 1, &label_inner_next_pc, 8);
         }
     }
 
     emit_mov_ri(&out, REG_FAIL, 0);
 
     for (int c = 0; c < COLS; ++c) {
-        emit_mov_ri(&out, REG_HOLE_TEMP, (uint64_t)holes[c]);
+        emit_mov_rr(&out, REG_HOLE_TEMP, (uint8_t)(REG_HOLE_BASE + c));
         emit_mov_rr(&out, REG_TMP0, (uint8_t)(REG_INPUT_BASE + c));
         emit_cmp_rr(&out, REG_TMP0, REG_HOLE_TEMP);
-        uint32_t jz_pos = (uint32_t)out.len;
-        emit_jz(&out, 0xDEADBEEF);
+        uint64_t jz_pos = (uint64_t)out.len;
+        emit_jz(&out, 0ULL); 
         emit_mov_ri(&out, REG_FAIL, 1);
-        uint32_t jmp_pos = (uint32_t)out.len;
-        emit_jmp(&out, 0xDEADBEEF);
-        uint32_t good_label_pc = (uint32_t)out.len;
-        memcpy(out.b + jz_pos + 1, &good_label_pc, 4);
+        uint64_t good_label_pc = (uint64_t)out.len;
+        memcpy(out.b + (size_t)jz_pos + 1, &good_label_pc, 8);
     }
 
+    emit_mov_rr(&out, REG_TMP0, REG_FAIL);
+    emit_mov_ri(&out, REG_HOLE_TEMP, 0);
+    emit_cmp_rr(&out, REG_TMP0, REG_HOLE_TEMP);
+    uint64_t jz_pos_final = (uint64_t)out.len;
+    emit_jz(&out, 0ULL); 
+    emit_mov_ri(&out, REG_RAX, 0);
+    uint64_t jmp_to_halt = (uint64_t)out.len;
+    emit_jmp(&out, 0ULL); 
+    uint64_t success_pc = (uint64_t)out.len;
+    emit_mov_ri(&out, REG_RAX, 1);
+    uint64_t halt_pc = (uint64_t)out.len;
+    emit_halt(&out);
 
-    uint8_t *old = out.b;
-    size_t grid_only_len = out.len;
-    Buf out2; buf_init(&out2);
+    memcpy(out.b + (size_t)jz_pos_final + 1, &success_pc, 8);
+    memcpy(out.b + (size_t)jmp_to_halt + 1, &halt_pc, 8);
 
-    for (int c = 0; c < COLS; ++c) {
-        emit_mov_ri(&out2, REG_HOLE_TEMP, (uint64_t)holes[c]);
-        for (int r = 0; r < ROWS; ++r) {
-            emit_mov_ri(&out2, REG_TMP0, (uint64_t)r);
-            emit_cmp_rr(&out2, REG_TMP0, REG_HOLE_TEMP);
-            uint32_t jz_pos = (uint32_t)out2.len;
-            emit_jz(&out2, 0xDEADBEEF);
-            emit_mov_ri(&out2, REG_TMP1, 1);
-            uint32_t jmp_pos = (uint32_t)out2.len;
-            emit_jmp(&out2, 0xDEADBEEF);
-            uint32_t label_set_zero_pc = (uint32_t)out2.len;
-            emit_mov_ri(&out2, REG_TMP1, 0);
-            uint32_t label_inner_next_pc = (uint32_t)out2.len;
-            memcpy(out2.b + jz_pos + 1, &label_set_zero_pc, 4);
-            memcpy(out2.b + jmp_pos + 1, &label_inner_next_pc, 4);
-        }
+    uint8_t *plain = out.b;
+    size_t plain_len = out.len;
+
+    if (!plain || plain_len == 0) {
+        if (out_len) *out_len = 0;
+        return NULL;
     }
 
-    emit_mov_ri(&out2, REG_FAIL, 0);
-    for (int c = 0; c < COLS; ++c) {
-        emit_mov_ri(&out2, REG_HOLE_TEMP, (uint64_t)holes[c]);
-        emit_mov_rr(&out2, REG_TMP0, (uint8_t)(REG_INPUT_BASE + c));
-        emit_cmp_rr(&out2, REG_TMP0, REG_HOLE_TEMP);
-        uint32_t jz_pos = (uint32_t)out2.len;
-        emit_jz(&out2, 0xDEADBEEF);
-        emit_mov_ri(&out2, REG_FAIL, 1);
-        uint32_t good_label_pc = (uint32_t)out2.len;
-        memcpy(out2.b + jz_pos + 1, &good_label_pc, 4);
-    }
+    uint64_t s = magic_seed();
+    unsigned char seed_bytes[8];
+    for (int i = 0; i < 8; ++i) seed_bytes[i] = (unsigned char)((s >> (8*i)) & 0xFF);
+    unsigned char key[32];
+    SHA256(seed_bytes, sizeof(seed_bytes), key);
 
-    emit_mov_rr(&out2, REG_TMP0, REG_FAIL);
-    emit_mov_ri(&out2, REG_HOLE_TEMP, 0);
-    emit_cmp_rr(&out2, REG_TMP0, REG_HOLE_TEMP);
-    uint32_t jz_pos_final = (uint32_t)out2.len;
-    emit_jz(&out2, 0xDEADBEEF);
-    emit_mov_ri(&out2, REG_RAX, 0);
-    uint32_t jmp_to_halt = (uint32_t)out2.len;
-    emit_jmp(&out2, 0xDEADBEEF); 
-    uint32_t success_pc = (uint32_t)out2.len;
-    emit_mov_ri(&out2, REG_RAX, 1);
-    uint32_t halt_pc = (uint32_t)out2.len;
-    emit_halt(&out2);
+    uint8_t *ct = malloc(plain_len);
+    if (!ct) { free(plain); if (out_len) *out_len = 0; return NULL; }
+    for (size_t i = 0; i < plain_len; ++i) ct[i] = plain[i] ^ key[i % sizeof(key)];
 
-    memcpy(out2.b + jz_pos_final + 1, &success_pc, 4);
+    size_t total = 4 + 8 + plain_len;
+    uint8_t *blob = malloc(total);
+    if (!blob) { free(plain); free(ct); if (out_len) *out_len = 0; return NULL; }
+    memcpy(blob + 0, "ENCR", 4);
+    uint64_t le_len = (uint64_t)plain_len;
+    memcpy(blob + 4, &le_len, sizeof(le_len));
+    memcpy(blob + 12, ct, plain_len);
 
-    memcpy(out2.b + jmp_to_halt + 1, &halt_pc, 4);
+    free(plain);
+    free(ct);
 
-    if (old) free(old);
-
-    *out_len = out2.len;
-    return out2.b;
+    if (out_len) *out_len = total;
+    return blob;
 }
 
 void example_usage(VM *vm) {
